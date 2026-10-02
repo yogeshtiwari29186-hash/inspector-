@@ -57,6 +57,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import com.example.ui.navigation.Routes
+import com.example.proxy.CertificateAuthority
 import com.example.util.OverlayUtils
 import com.example.viewmodel.SettingsViewModel
 import com.example.viewmodel.TrafficViewModel
@@ -215,6 +216,28 @@ fun OverlaySetupScreen(
                                 text = "Permission is active. The floating bubble will appear whenever the inspector is running.",
                                 fontSize = 12.sp,
                                 color = Color(0xFF34D399)
+                            )
+
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            OutlinedButton(
+                                onClick = {
+                                    context.startActivity(CertificateAuthority.installIntent(context))
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(Icons.Default.Security, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("INSTALL HTTPS INSPECTION CA", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
+
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            Text(
+                                text = "For your own/test device only. Android will ask you to explicitly install the local CA. This does not bypass certificate pinning.",
+                                fontSize = 11.sp,
+                                color = Color(0xFF94A3B8),
+                                lineHeight = 15.sp
                             )
 
                             Spacer(modifier = Modifier.height(12.dp))
