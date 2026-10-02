@@ -1,0 +1,231 @@
+name: Build Debug APK and Publish Release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Temurin Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Verify Java environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          java -version
+          echo "JAVA_HOME=$JAVA_HOME"
+
+          java_major="$(java -version 2>&1 | awk -F'[".]' '/version/ {print $2; exit}')"
+          if [[ -z "$java_major" || ! "$java_major" =~ ^[0-9]+$ ]]; then
+            echo "::error::Unable to detect the active Java major version."
+            exit 1
+          fi
+
+          echo "Active Java major version: $java_major"
+          if (( java_major < 17 )); then
+            echo "::error::Java 17 or newer is required; detected Java $java_major."
+            exit 1
+          fi
+
+      - name: Set up Gradle 9.3.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.3.1'
+
+      - name: Create temporary debug keystore
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ ! -f ./debug.keystore ]]; then
+            "${JAVA_HOME}/bin/keytool" -genkeypair \
+              -keystore ./debug.keystore \
+              -storepass android \
+              -keypass android \
+              -alias androiddebugkey \
+              -dname "CN=Android Debug,O=Android,C=US" \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000
+          fi
+
+          if [[ ! -f ./debug.keystore ]]; then
+            echo "::error::Temporary debug keystore could not be created."
+            exit 1
+          fi
+
+          echo "Temporary debug keystore exists."
+
+      - name: Build debug APK
+        shell: bash
+        run: gradle :app:assembleDebug --stacktrace --no-daemon
+
+      - name: Verify APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          apk="app/build/outputs/apk/debug/app-debug.apk"
+
+          if [[ ! -f "$apk" ]]; then
+            echo "::error::Expected debug APK is missing: $apk"
+            echo "APK files discovered inside app/build/outputs/apk:"
+            find app/build/outputs/apk -type f -name '*.apk' -print 2>/dev/null || true
+            exit 1
+          fi
+
+          if [[ ! -f "$apk" || ! -s "$apk" || "${apk##*.}" != "apk" ]]; then
+            echo "::error::Selected APK is invalid: $apk"
+            exit 1
+          fi
+
+          echo "Verified APK: $apk"
+
+      - name: Upload debug APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+      - name: Prepare APK release asset
+        id: prepare-release-asset
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          release_dir="$(mktemp -d)"
+          repo_name="${GITHUB_REPOSITORY##*/}"
+          safe_repo_name="$(printf '%s' "$repo_name" | tr -cs 'A-Za-z0-9._-' '-' | sed 's/^-*//; s/-*$//')"
+
+          if [[ -z "$safe_repo_name" ]]; then
+            safe_repo_name="android-app"
+          fi
+
+          release_filename="${safe_repo_name}-debug-build-${GITHUB_RUN_NUMBER}.apk"
+          release_asset="${release_dir}/${release_filename}"
+
+          cp -- app/build/outputs/apk/debug/app-debug.apk "$release_asset"
+
+          if [[ ! -f "$release_asset" || ! -s "$release_asset" || "${release_asset##*.}" != "apk" ]]; then
+            echo "::error::Prepared release asset is invalid."
+            exit 1
+          fi
+
+          echo "release_asset=$release_asset" >> "$GITHUB_OUTPUT"
+          echo "release_filename=$release_filename" >> "$GITHUB_OUTPUT"
+
+      - name: Publish APK to GitHub Releases
+        id: publish-release
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ASSET: ${{ steps.prepare-release-asset.outputs.release_asset }}
+          RELEASE_FILENAME: ${{ steps.prepare-release-asset.outputs.release_filename }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          gh --version
+
+          if [[ ! -f "$RELEASE_ASSET" || ! -s "$RELEASE_ASSET" || "${RELEASE_ASSET##*.}" != "apk" ]]; then
+            echo "::error::Release asset validation failed; release will not be created."
+            exit 1
+          fi
+
+          tag="debug-apk-build-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
+          title="Debug APK Build #${GITHUB_RUN_NUMBER}"
+
+          gh release create "$tag" "$RELEASE_ASSET" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "$title" \
+            --notes "This is an automatically generated debug APK.
+Built by GitHub Actions.
+Run number: ${GITHUB_RUN_NUMBER}
+Run attempt: ${GITHUB_RUN_ATTEMPT}
+Source commit SHA: ${GITHUB_SHA}
+The APK is intended for testing.
+This APK is not a Play Store production release.
+The APK is signed only with a temporary debug keystore.
+Release asset: ${RELEASE_FILENAME}" \
+            --latest
+
+      - name: Report APK download result
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_OUTCOME: ${{ steps.publish-release.outcome }}
+          RELEASE_ASSET_FILENAME: ${{ steps.prepare-release-asset.outputs.release_filename }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag="debug-apk-build-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
+
+          if [[ "$RELEASE_OUTCOME" == "success" ]]; then
+            gh --version
+            gh release view "$tag" --repo "$GITHUB_REPOSITORY"
+
+            release_url="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json url --jq '.url')"
+            release_title="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json name --jq '.name')"
+
+            echo "Release tag: $tag"
+            echo "Release title: $release_title"
+            echo "Release page: $release_url"
+            echo "APK asset: $RELEASE_ASSET_FILENAME"
+            echo "The APK can be downloaded directly from the release Assets section."
+            echo "The normal Actions artifact app-debug-apk is also available as a backup."
+
+            {
+              echo "## APK download"
+              echo ""
+              echo "Build and Actions artifact upload succeeded."
+              echo ""
+              echo "**Release publishing:** succeeded"
+              echo ""
+              echo "**Release tag:** `$tag`"
+              echo ""
+              echo "**Release title:** $release_title"
+              echo ""
+              echo "**Release page:** $release_url"
+              echo ""
+              echo "**APK asset:** `$RELEASE_ASSET_FILENAME`"
+              echo ""
+              echo "Download the APK from the release **Assets** section."
+              echo ""
+              echo "The normal Actions artifact `app-debug-apk` is also available as a backup."
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::GitHub Release publishing failed or was skipped."
+            echo "The APK build succeeded."
+            echo "The Actions artifact named app-debug-apk remains available."
+            echo "No release URL is reported because release publishing did not succeed."
+
+            {
+              echo "## APK download"
+              echo ""
+              echo "**Release publishing:** failed"
+              echo ""
+              echo "The APK build and Actions artifact upload succeeded."
+              echo ""
+              echo "The Actions artifact `app-debug-apk` remains available as a backup."
+              echo ""
+              echo "No GitHub Release URL is reported because release publishing did not succeed."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
