@@ -53,7 +53,7 @@ class InspectorForegroundService : Service() {
         serviceScope.launch {
             app.trafficRepository.pendingRequests.collectLatest { pending ->
                 val status = if (app.proxyServer.isPaused()) "PAUSED" else "Running"
-                val text = if (pending.isNotEmpty()) "\${status} • \${pending.size} request(s) waiting" else "Proxy active (\${status})"
+                val text = if (pending.isNotEmpty()) status + " • " + pending.size + " request(s) waiting" else "Proxy active (" + status + ")"
                 updateNotification(text)
             }
         }
