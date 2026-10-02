@@ -151,11 +151,9 @@ jobs:
           tag="debug-apk-build-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
           title="Debug APK Build #${GITHUB_RUN_NUMBER}"
 
-          gh release create "$tag" "$RELEASE_ASSET" \
-            --repo "$GITHUB_REPOSITORY" \
-            --target "$GITHUB_SHA" \
-            --title "$title" \
-            --notes "This is an automatically generated debug APK.
+          notes_file="$(mktemp)"
+          cat > "$notes_file" <<EOF
+This is an automatically generated debug APK.
 Built by GitHub Actions.
 Run number: ${GITHUB_RUN_NUMBER}
 Run attempt: ${GITHUB_RUN_ATTEMPT}
@@ -163,8 +161,17 @@ Source commit SHA: ${GITHUB_SHA}
 The APK is intended for testing.
 This APK is not a Play Store production release.
 The APK is signed only with a temporary debug keystore.
-Release asset: ${RELEASE_FILENAME}" \
+Release asset: ${RELEASE_FILENAME}
+EOF
+
+          gh release create "$tag" "$RELEASE_ASSET" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "$title" \
+            --notes-file "$notes_file" \
             --latest
+
+          rm -f "$notes_file"
 
       - name: Report APK download result
         if: always()
