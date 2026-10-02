@@ -206,15 +206,21 @@ class ProxyServer(
             )
             capturedRequest = request
 
-            listener?.onRequestCaptured(request)
-
             val settings = settingsRepository.settingsFlow.value
             val shouldIntercept = paused.get() || settings.interceptRequests
 
+            // Register before publishing to the UI so an immediate FORWARD/BLOCK cannot race.
+            val requestDecision = if (shouldIntercept) {
+                requestInterceptor.register(requestId)
+            } else {
+                null
+            }
+
+            listener?.onRequestCaptured(request)
+
             val finalRequestToForward: CapturedRequest
             if (shouldIntercept) {
-                val deferred = requestInterceptor.register(requestId)
-                val decision = deferred.await()
+                val decision = requestDecision!!.await()
                 when (decision) {
                     is RequestDecision.Forward -> {
                         finalRequestToForward = decision.request
@@ -240,14 +246,19 @@ class ProxyServer(
                 return@withContext
             }
 
+            // Register before publishing so an immediate RETURN/BLOCK cannot race.
+            val shouldInterceptResponse = settings.interceptResponses
+            val responseDecision = if (shouldInterceptResponse) {
+                responseInterceptor.register(requestId)
+            } else {
+                null
+            }
+
             listener?.onResponseCaptured(response)
 
-            // Response Interception
-            val shouldInterceptResponse = settings.interceptResponses
             val finalResponseToReturn: CapturedResponse
             if (shouldInterceptResponse) {
-                val respDeferred = responseInterceptor.register(requestId)
-                val respDecision = respDeferred.await()
+                val respDecision = responseDecision!!.await()
                 when (respDecision) {
                     is ResponseDecision.Return -> {
                         finalResponseToReturn = respDecision.response
