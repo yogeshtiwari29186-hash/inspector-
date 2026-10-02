@@ -1,6 +1,11 @@
 package com.example.ui.screens
 
 import android.widget.Toast
+import android.app.Activity
+import android.net.VpnService
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import com.example.vpn.InspectorVpnService
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -72,6 +77,34 @@ fun OverlaySetupScreen(
 ) {
     val context = LocalContext.current
     var hasPermission by remember { mutableStateOf(OverlayUtils.canDrawOverlays(context)) }
+    var vpnPrepared by remember { mutableStateOf(VpnService.prepare(context) == null) }
+
+    val vpnPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        vpnPrepared = result.resultCode == Activity.RESULT_OK && VpnService.prepare(context) == null
+        if (vpnPrepared) {
+            trafficViewModel.startProxy(context)
+            settingsViewModel.setFloatingInspector(true, context)
+            InspectorVpnService.start(context)
+            Toast.makeText(context, "Inspector VPN started", Toast.LENGTH_SHORT).show()
+        } else {
+            Toast.makeText(context, "VPN permission is required for automatic traffic capture", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    fun startInspection() {
+        val intent = InspectorVpnService.prepareIntent(context)
+        if (intent != null) {
+            vpnPermissionLauncher.launch(intent)
+        } else {
+            vpnPrepared = true
+            trafficViewModel.startProxy(context)
+            settingsViewModel.setFloatingInspector(true, context)
+            InspectorVpnService.start(context)
+            Toast.makeText(context, "Inspector VPN started", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     // Re-check whenever screen resumes from system settings
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
@@ -289,10 +322,10 @@ fun OverlaySetupScreen(
                 Spacer(modifier = Modifier.height(8.dp))
 
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    GuideStep(1, "Configure Proxy in your debug app (127.0.0.1:8080 or 10.0.2.2:8080)")
-                    GuideStep(2, "Switch to your development app while keeping DevTraffic active in background")
-                    GuideStep(3, "When a request is captured, the floating badge increments (e.g. 1, 2, 3)")
-                    GuideStep(4, "Tap floating icon to open compact panel: inspect, forward, or modify")
+                    GuideStep(1, "Allow the Inspector VPN once. It routes device traffic to the local inspector automatically.")
+                    GuideStep(2, "Install the DevTraffic Local CA on your own/test device for HTTPS inspection.")
+                    GuideStep(3, "Login normally. The request will pause in the Inspector when interception is enabled.")
+                    GuideStep(4, "Edit the request, tap SAVE & FORWARD, then inspect/edit the response before Return.")
                 }
             }
 
