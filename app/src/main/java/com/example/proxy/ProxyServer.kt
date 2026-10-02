@@ -318,7 +318,7 @@ class ProxyServer(
             }
 
             val headerText = String(headerBytes, Charsets.ISO_8859_1)
-            val lines = headerText.split("\\r\\n").filter { it.isNotEmpty() }
+            val lines = headerText.split("\r\n").filter { it.isNotEmpty() }
             if (lines.isEmpty()) {
                 tlsSocket.close(); targetSocket.close(); return@withContext
             }
@@ -351,7 +351,7 @@ class ProxyServer(
                 String(bytes, 0, total, Charsets.UTF_8)
             } else null
 
-            val fullUrl = "https://$${host}:$${port}$${rawPath}"
+            val fullUrl = "https://${host}:${port}${rawPath}"
             val uri = try { URI(fullUrl) } catch (_: Exception) { null }
             val request = CapturedRequest(
                 id = requestId,
@@ -415,8 +415,8 @@ class ProxyServer(
             tlsSocket.close()
             targetSocket.close()
         } catch (e: Exception) {
-            listener?.onError(requestId, "HTTPS inspection failed for $${host}:$${port}: $${e.message}. Install the DevTraffic Local CA on the test device.")
-            try { sendErrorResponse(output, 502, "Bad Gateway", "HTTPS inspection setup failed: $${e.message}") } catch (_: Exception) {}
+            listener?.onError(requestId, "HTTPS inspection failed for ${host}:${port}: ${e.message}. Install the DevTraffic Local CA on the test device.")
+            try { sendErrorResponse(output, 502, "Bad Gateway", "HTTPS inspection setup failed: ${e.message}") } catch (_: Exception) {}
             try { socket.close() } catch (_: Exception) {}
         }
     }
