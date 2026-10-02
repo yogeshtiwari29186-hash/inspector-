@@ -1,5 +1,7 @@
 package com.example.ui.screens
 
+import android.content.Intent
+import android.provider.Settings
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -72,6 +74,33 @@ fun SettingsScreen(
 
     var showClearHistoryDialog by remember { mutableStateOf(false) }
     var showResetDialog by remember { mutableStateOf(false) }
+    var showProxySetupDialog by remember { mutableStateOf(false) }
+
+    if (showProxySetupDialog) {
+        AlertDialog(
+            onDismissRequest = { showProxySetupDialog = false },
+            title = { Text("Connect this device to Inspector", fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    "Android does not allow a normal app to silently change the active Wi-Fi proxy. " +
+                    "Open Wi-Fi settings and set the connected network proxy to:\\n\\n" +
+                    "Proxy: ${settings.host}\\nPort: ${settings.port}\\n\\n" +
+                    "Then return to the browser/app you want to inspect. Turn the proxy off when finished."
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showProxySetupDialog = false
+                        try { context.startActivity(Intent(Settings.ACTION_WIFI_SETTINGS)) }
+                        catch (_: Exception) { context.startActivity(Intent(Settings.ACTION_SETTINGS)) }
+                    }
+                ) { Text("OPEN WI-FI SETTINGS") }
+            },
+            dismissButton = { TextButton(onClick = { showProxySetupDialog = false }) { Text("CANCEL") } },
+            containerColor = Color(0xFF1E293B)
+        )
+    }
 
     if (showClearHistoryDialog) {
         AlertDialog(
@@ -218,7 +247,25 @@ fun SettingsScreen(
                                 color = Color(0xFF94A3B8),
                                 lineHeight = 16.sp
                             )
+                            Spacer(modifier = Modifier.height(12.dp))
+                        Button(
+                            onClick = {
+                                com.example.service.InspectorForegroundService.start(context)
+                                showProxySetupDialog = true
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2563EB))
+                        ) {
+                            Text("SET UP THIS DEVICE FOR INSPECTION", fontWeight = FontWeight.Bold)
                         }
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "Starts the inspector and opens Wi-Fi settings for the required proxy configuration.",
+                            fontSize = 10.sp,
+                            color = Color(0xFF64748B)
+                        )
+
+                    }
                     }
                 }
             }
