@@ -90,6 +90,8 @@ dependencies {
   implementation(libs.logging.interceptor)
   implementation(libs.moshi.kotlin)
   implementation(libs.okhttp)
+  implementation("org.bouncycastle:bcprov-jdk18on:1.80")
+  implementation("org.bouncycastle:bcpkix-jdk18on:1.80")
   implementation(libs.retrofit)
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
