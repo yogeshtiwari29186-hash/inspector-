@@ -48,33 +48,35 @@ jobs:
         with:
           gradle-version: '9.3.1'
 
-      - name: Create temporary debug keystore
+      - name: Build debug APK
+        shell: bash
+        run: gradle :app:assembleDebug --stacktrace --no-daemon
+
+      - name: Verify APK signing and alignment
         shell: bash
         run: |
           set -euo pipefail
 
-          if [[ ! -f ./debug.keystore ]]; then
-            "${JAVA_HOME}/bin/keytool" -genkeypair \
-              -keystore ./debug.keystore \
-              -storepass android \
-              -keypass android \
-              -alias androiddebugkey \
-              -dname "CN=Android Debug,O=Android,C=US" \
-              -keyalg RSA \
-              -keysize 2048 \
-              -validity 10000
-          fi
+          apk="app/build/outputs/apk/debug/app-debug.apk"
+          build_tools_dir="$(find "${ANDROID_HOME}/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
 
-          if [[ ! -f ./debug.keystore ]]; then
-            echo "::error::Temporary debug keystore could not be created."
+          if [[ -z "$build_tools_dir" ]]; then
+            echo "::error::Android build-tools were not found."
             exit 1
           fi
 
-          echo "Temporary debug keystore exists."
+          apksigner="$build_tools_dir/apksigner"
+          zipalign="$build_tools_dir/zipalign"
 
-      - name: Build debug APK
-        shell: bash
-        run: gradle :app:assembleDebug --stacktrace --no-daemon
+          if [[ ! -x "$apksigner" || ! -x "$zipalign" ]]; then
+            echo "::error::apksigner or zipalign is missing from $build_tools_dir"
+            exit 1
+          fi
+
+          "$zipalign" -c -v 4 "$apk"
+          "$apksigner" verify --verbose --print-certs "$apk"
+
+          echo "APK alignment and Android signing verification passed."
 
       - name: Verify APK
         shell: bash
