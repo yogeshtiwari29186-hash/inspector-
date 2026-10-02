@@ -12,6 +12,7 @@ import androidx.core.app.NotificationCompat
 import com.example.DevTrafficInspectorApp
 import com.example.MainActivity
 import com.example.R
+import com.example.util.OverlayUtils
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -20,43 +21,31 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
 class InspectorForegroundService : Service() {
-
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action ?: ACTION_START
         val app = DevTrafficInspectorApp.instance
-
         when (action) {
             ACTION_START -> {
                 startForegroundNotification("Network inspector is running")
-                serviceScope.launch(Dispatchers.IO) {
-                    try {
-                        app.proxyServer.start()
-                    } catch (_: Exception) {}
+                if (app.settingsRepository.settingsFlow.value.floatingInspectorEnabled && OverlayUtils.canDrawOverlays(this)) {
+                    OverlayService.start(this)
                 }
+                serviceScope.launch(Dispatchers.IO) { try { app.proxyServer.start() } catch (_: Exception) {} }
                 observeTrafficUpdates()
             }
-            ACTION_PAUSE -> {
-                app.proxyServer.pause()
-                updateNotification("Network inspector is PAUSED")
-            }
-            ACTION_RESUME -> {
-                app.proxyServer.resume()
-                updateNotification("Network inspector is running")
-            }
+            ACTION_PAUSE -> { app.proxyServer.pause(); updateNotification("Network inspector is PAUSED") }
+            ACTION_RESUME -> { app.proxyServer.resume(); updateNotification("Network inspector is running") }
             ACTION_STOP -> {
-                serviceScope.launch(Dispatchers.IO) {
-                    app.proxyServer.stop()
-                }
+                serviceScope.launch(Dispatchers.IO) { try { app.proxyServer.stop() } catch (_: Exception) {} }
+                OverlayService.stop(this)
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
             }
         }
-
-        return START_STICKY
+        return START_NOT_STICKY
     }
 
     private fun observeTrafficUpdates() {
@@ -64,11 +53,7 @@ class InspectorForegroundService : Service() {
         serviceScope.launch {
             app.trafficRepository.pendingRequests.collectLatest { pending ->
                 val status = if (app.proxyServer.isPaused()) "PAUSED" else "Running"
-                val text = if (pending.isNotEmpty()) {
-                    "$status • ${pending.size} request(s) waiting"
-                } else {
-                    "Proxy active ($status)"
-                }
+                val text = if (pending.isNotEmpty()) "\${status} • \${pending.size} request(s) waiting" else "Proxy active (\${status})"
                 updateNotification(text)
             }
         }
@@ -77,53 +62,25 @@ class InspectorForegroundService : Service() {
     private fun startForegroundNotification(statusText: String) {
         val notification = buildNotification(statusText)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
-                DevTrafficInspectorApp.NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-            )
-        } else {
-            startForeground(DevTrafficInspectorApp.NOTIFICATION_ID, notification)
-        }
+            startForeground(DevTrafficInspectorApp.NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+        } else startForeground(DevTrafficInspectorApp.NOTIFICATION_ID, notification)
     }
 
     private fun updateNotification(statusText: String) {
-        val notificationManager = getSystemService(NOTIFICATION_SERVICE) as android.app.NotificationManager
-        notificationManager.notify(DevTrafficInspectorApp.NOTIFICATION_ID, buildNotification(statusText))
+        val manager = getSystemService(NOTIFICATION_SERVICE) as android.app.NotificationManager
+        manager.notify(DevTrafficInspectorApp.NOTIFICATION_ID, buildNotification(statusText))
     }
 
     private fun buildNotification(statusText: String): Notification {
-        val openIntent = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
-        }
-        val openPendingIntent = PendingIntent.getActivity(
-            this,
-            0,
-            openIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
+        val openIntent = Intent(this, MainActivity::class.java).apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP }
+        val openPendingIntent = PendingIntent.getActivity(this, 0, openIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val pauseIntent = Intent(this, InspectorForegroundService::class.java).apply {
             action = if (DevTrafficInspectorApp.instance.proxyServer.isPaused()) ACTION_RESUME else ACTION_PAUSE
         }
-        val pausePendingIntent = PendingIntent.getService(
-            this,
-            1,
-            pauseIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        val stopIntent = Intent(this, InspectorForegroundService::class.java).apply {
-            action = ACTION_STOP
-        }
-        val stopPendingIntent = PendingIntent.getService(
-            this,
-            2,
-            stopIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        val pauseActionTitle = if (DevTrafficInspectorApp.instance.proxyServer.isPaused()) "RESUME" else "PAUSE"
+        val pausePendingIntent = PendingIntent.getService(this, 1, pauseIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val stopIntent = Intent(this, InspectorForegroundService::class.java).apply { action = ACTION_STOP }
+        val stopPendingIntent = PendingIntent.getService(this, 2, stopIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val pauseTitle = if (DevTrafficInspectorApp.instance.proxyServer.isPaused()) "RESUME" else "PAUSE"
 
         return NotificationCompat.Builder(this, DevTrafficInspectorApp.NOTIFICATION_CHANNEL_ID)
             .setContentTitle("DevTraffic Inspector")
@@ -133,15 +90,12 @@ class InspectorForegroundService : Service() {
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .addAction(android.R.drawable.ic_menu_view, "OPEN", openPendingIntent)
-            .addAction(android.R.drawable.ic_media_pause, pauseActionTitle, pausePendingIntent)
+            .addAction(android.R.drawable.ic_media_pause, pauseTitle, pausePendingIntent)
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, "STOP", stopPendingIntent)
             .build()
     }
 
-    override fun onDestroy() {
-        super.onDestroy()
-        serviceScope.cancel()
-    }
+    override fun onDestroy() { super.onDestroy(); serviceScope.cancel() }
 
     companion object {
         const val ACTION_START = "com.devtraffic.inspector.action.START"
@@ -150,35 +104,11 @@ class InspectorForegroundService : Service() {
         const val ACTION_RESUME = "com.devtraffic.inspector.action.RESUME"
 
         fun start(context: Context) {
-            val intent = Intent(context, InspectorForegroundService::class.java).apply {
-                action = ACTION_START
-            }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
-            }
+            val intent = Intent(context, InspectorForegroundService::class.java).apply { action = ACTION_START }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
         }
-
-        fun stop(context: Context) {
-            val intent = Intent(context, InspectorForegroundService::class.java).apply {
-                action = ACTION_STOP
-            }
-            context.startService(intent)
-        }
-
-        fun pause(context: Context) {
-            val intent = Intent(context, InspectorForegroundService::class.java).apply {
-                action = ACTION_PAUSE
-            }
-            context.startService(intent)
-        }
-
-        fun resume(context: Context) {
-            val intent = Intent(context, InspectorForegroundService::class.java).apply {
-                action = ACTION_RESUME
-            }
-            context.startService(intent)
-        }
+        fun stop(context: Context) { context.startService(Intent(context, InspectorForegroundService::class.java).apply { action = ACTION_STOP }) }
+        fun pause(context: Context) { context.startService(Intent(context, InspectorForegroundService::class.java).apply { action = ACTION_PAUSE }) }
+        fun resume(context: Context) { context.startService(Intent(context, InspectorForegroundService::class.java).apply { action = ACTION_RESUME }) }
     }
 }
