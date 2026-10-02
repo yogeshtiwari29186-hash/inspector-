@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -36,6 +37,8 @@ import com.example.ui.screens.SettingsScreen
 import com.example.ui.theme.DevTrafficTheme
 import com.example.viewmodel.SettingsViewModel
 import com.example.viewmodel.TrafficViewModel
+import com.example.service.InspectorForegroundService
+import com.example.util.OverlayUtils
 
 class MainActivity : ComponentActivity() {
 
@@ -63,6 +66,19 @@ class MainActivity : ComponentActivity() {
                     ) { _ -> }
 
                     LaunchedEffect(Unit) {
+                        val prefs = getSharedPreferences("devtraffic_setup", MODE_PRIVATE)
+                        val setupCompleted = prefs.getBoolean("overlay_setup_completed", false)
+                        val overlayGranted = OverlayUtils.canDrawOverlays(this@MainActivity)
+
+                        if (!overlayGranted || !setupCompleted) {
+                            navController.navigate(Routes.OVERLAY_SETUP) {
+                                popUpTo(Routes.DASHBOARD) { inclusive = false }
+                                launchSingleTop = true
+                            }
+                        } else if (settingsViewModel.settings.value.floatingInspectorEnabled) {
+                            InspectorForegroundService.start(this@MainActivity)
+                        }
+
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                             if (ContextCompat.checkSelfPermission(
                                     this@MainActivity,
