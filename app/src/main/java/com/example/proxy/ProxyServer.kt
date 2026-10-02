@@ -162,7 +162,7 @@ class ProxyServer(
 
             // Handle HTTPS CONNECT tunnel handshake
             if (method == "CONNECT") {
-                handleConnectTunnel(socket, input, output, rawUri, requestId)
+                handleConnectMitm(socket, input, output, rawUri, requestId)
                 return@withContext
             }
 
@@ -283,75 +283,140 @@ class ProxyServer(
         }
     }
 
-    private fun handleConnectTunnel(
+    private suspend fun handleConnectMitm(
         socket: Socket,
         input: BufferedInputStream,
         output: BufferedOutputStream,
         rawUri: String,
         requestId: String
-    ) {
+    ) = withContext(Dispatchers.IO) {
         val parts = rawUri.split(":")
         val host = parts[0]
         val port = parts.getOrNull(1)?.toIntOrNull() ?: 443
-
-        val capturedReq = CapturedRequest(
-            id = requestId,
-            timestamp = System.currentTimeMillis(),
-            method = "CONNECT",
-            url = "https://$host:$port",
-            scheme = "https",
-            host = host,
-            port = port,
-            path = "/",
-            state = TrafficState.FORWARDED
-        )
-        listener?.onRequestCaptured(capturedReq)
-
         try {
             val targetSocket = Socket(host, port)
             targetSocket.soTimeout = 30000
-
-            val established = "HTTP/1.1 200 Connection Established\r\n\r\n"
-            output.write(established.toByteArray(Charsets.ISO_8859_1))
+            output.write("HTTP/1.1 200 Connection Established\\r\\n\\r\\n".toByteArray(Charsets.ISO_8859_1))
             output.flush()
 
-            val targetIn = BufferedInputStream(targetSocket.getInputStream())
-            val targetOut = BufferedOutputStream(targetSocket.getOutputStream())
+            val sslContext = CertificateAuthority.createServerContext(
+                DevTrafficInspectorApp.instance, host
+            )
+            val tlsSocket = sslContext.socketFactory.createSocket(
+                socket, host, socket.port, true
+            ) as javax.net.ssl.SSLSocket
+            tlsSocket.useClientMode = false
+            tlsSocket.soTimeout = 30000
+            tlsSocket.startHandshake()
 
-            serverScope.launch(Dispatchers.IO) {
-                try {
-                    val buffer = ByteArray(8192)
-                    var read: Int
-                    while (input.read(buffer).also { read = it } != -1) {
-                        targetOut.write(buffer, 0, read)
-                        targetOut.flush()
-                    }
-                } catch (_: Exception) {} finally {
-                    try { targetSocket.close() } catch (_: Exception) {}
-                    try { socket.close() } catch (_: Exception) {}
-                }
+            val tlsInput = BufferedInputStream(tlsSocket.inputStream)
+            val tlsOutput = BufferedOutputStream(tlsSocket.outputStream)
+            val headerBytes = readHeaderBytes(tlsInput)
+            if (headerBytes.isEmpty()) {
+                tlsSocket.close(); targetSocket.close(); return@withContext
             }
 
-            serverScope.launch(Dispatchers.IO) {
-                try {
-                    val buffer = ByteArray(8192)
-                    var read: Int
-                    while (targetIn.read(buffer).also { read = it } != -1) {
-                        output.write(buffer, 0, read)
-                        output.flush()
-                    }
-                } catch (_: Exception) {} finally {
-                    try { socket.close() } catch (_: Exception) {}
-                    try { targetSocket.close() } catch (_: Exception) {}
-                }
+            val headerText = String(headerBytes, Charsets.ISO_8859_1)
+            val lines = headerText.split("\\r\\n").filter { it.isNotEmpty() }
+            if (lines.isEmpty()) {
+                tlsSocket.close(); targetSocket.close(); return@withContext
+            }
+            val requestParts = lines[0].split(" ")
+            if (requestParts.size < 2) {
+                tlsSocket.close(); targetSocket.close(); return@withContext
             }
 
+            val method = requestParts[0].uppercase()
+            val rawPath = requestParts[1]
+            val protocol = requestParts.getOrNull(2) ?: "HTTP/1.1"
+            val headers = mutableMapOf<String, String>()
+            for (i in 1 until lines.size) {
+                val colon = lines[i].indexOf(':')
+                if (colon > 0) headers[lines[i].substring(0, colon).trim()] = lines[i].substring(colon + 1).trim()
+            }
+
+            val contentLength = headers.entries.firstOrNull {
+                it.key.equals("Content-Length", ignoreCase = true)
+            }?.value?.toLongOrNull() ?: 0L
+
+            val bodyString = if (contentLength in 1..(5L * 1024 * 1024)) {
+                val bytes = ByteArray(contentLength.toInt())
+                var total = 0
+                while (total < bytes.size) {
+                    val n = tlsInput.read(bytes, total, bytes.size - total)
+                    if (n < 0) break
+                    total += n
+                }
+                String(bytes, 0, total, Charsets.UTF_8)
+            } else null
+
+            val fullUrl = "https://$${host}:$${port}$${rawPath}"
+            val uri = try { URI(fullUrl) } catch (_: Exception) { null }
+            val request = CapturedRequest(
+                id = requestId,
+                timestamp = System.currentTimeMillis(),
+                method = method,
+                url = fullUrl,
+                scheme = "https",
+                host = host,
+                port = port,
+                path = uri?.path?.ifBlank { "/" } ?: "/",
+                queryParameters = parseQueryParams(uri?.rawQuery),
+                headers = headers,
+                body = bodyString,
+                contentType = headers.entries.firstOrNull {
+                    it.key.equals("Content-Type", ignoreCase = true)
+                }?.value,
+                contentLength = if (contentLength > 0) contentLength else null,
+                protocol = protocol,
+                state = TrafficState.WAITING
+            )
+
+            val settings = settingsRepository.settingsFlow.value
+            val shouldIntercept = paused.get() || settings.interceptRequests
+            val requestDecision = if (shouldIntercept) requestInterceptor.register(requestId) else null
+            listener?.onRequestCaptured(request)
+
+            val finalRequest = if (shouldIntercept) {
+                when (val decision = requestDecision!!.await()) {
+                    is RequestDecision.Forward -> decision.request
+                    is RequestDecision.Block -> {
+                        sendBlockedResponse(tlsOutput, "Request blocked by user in DevTraffic Inspector")
+                        listener?.onRequestBlocked(request)
+                        tlsSocket.close(); targetSocket.close(); return@withContext
+                    }
+                }
+            } else request
+
+            val response = try {
+                httpForwarder.forward(finalRequest)
+            } catch (e: Exception) {
+                listener?.onError(requestId, e.message ?: "HTTPS forwarding error")
+                sendErrorResponse(tlsOutput, 502, "Bad Gateway", e.message ?: "Forwarding failed")
+                tlsSocket.close(); targetSocket.close(); return@withContext
+            }
+
+            val responseDecision = if (settings.interceptResponses) responseInterceptor.register(requestId) else null
+            listener?.onResponseCaptured(response)
+
+            val finalResponse = if (settings.interceptResponses) {
+                when (val decision = responseDecision!!.await()) {
+                    is ResponseDecision.Return -> decision.response
+                    is ResponseDecision.Block -> {
+                        sendBlockedResponse(tlsOutput, "Response blocked by user in DevTraffic Inspector")
+                        tlsSocket.close(); targetSocket.close(); return@withContext
+                    }
+                }
+            } else response
+
+            writeResponseToClient(tlsOutput, finalResponse)
+            tlsOutput.flush()
+            tlsSocket.close()
+            targetSocket.close()
         } catch (e: Exception) {
-            listener?.onError(requestId, "HTTPS Tunnel error to $host:$port: ${e.message}")
-            try {
-                sendErrorResponse(output, 502, "Bad Gateway", "Failed to connect to $host:$port: ${e.message}")
-                socket.close()
-            } catch (_: Exception) {}
+            listener?.onError(requestId, "HTTPS inspection failed for $${host}:$${port}: $${e.message}. Install the DevTraffic Local CA on the test device.")
+            try { sendErrorResponse(output, 502, "Bad Gateway", "HTTPS inspection setup failed: $${e.message}") } catch (_: Exception) {}
+            try { socket.close() } catch (_: Exception) {}
         }
     }
 
