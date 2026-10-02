@@ -1,0 +1,6 @@
+{
+  "name": "DevTraffic Inspector",
+  "description": "Developer network traffic inspector and HTTP/HTTPS proxy with real-time capture, request and response editing, and floating overlay.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
