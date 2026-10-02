@@ -12,6 +12,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.withContext
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
@@ -299,6 +300,29 @@ class ProxyServer(
             targetSocket.soTimeout = 30000
             output.write("HTTP/1.1 200 Connection Established\\r\\n\\r\\n".toByteArray(Charsets.ISO_8859_1))
             output.flush()
+
+            // The VPN engine uses HTTP CONNECT for every TCP flow. Only TLS traffic
+            // on 443 is decrypted for the request editor; DNS/HTTP and other ports
+            // must remain byte-for-byte tunnels or the connection would break.
+            if (port != 443) {
+                val up = serverScope.launch(Dispatchers.IO) {
+                    try {
+                        input.copyTo(targetSocket.getOutputStream())
+                        targetSocket.shutdownOutput()
+                    } catch (_: Exception) { }
+                }
+                val down = serverScope.launch(Dispatchers.IO) {
+                    try {
+                        targetSocket.getInputStream().copyTo(output)
+                        output.flush()
+                        socket.shutdownOutput()
+                    } catch (_: Exception) { }
+                }
+                joinAll(up, down)
+                targetSocket.close()
+                socket.close()
+                return@withContext
+            }
 
             val sslContext = CertificateAuthority.createServerContext(
                 DevTrafficInspectorApp.instance, host
