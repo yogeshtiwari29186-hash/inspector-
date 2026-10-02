@@ -76,6 +76,8 @@ fun OverlaySetupScreen(
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         hasPermission = OverlayUtils.canDrawOverlays(context)
         if (hasPermission) {
+            context.getSharedPreferences("devtraffic_setup", android.content.Context.MODE_PRIVATE)
+                .edit().putBoolean("overlay_setup_completed", true).apply()
             settingsViewModel.setFloatingInspector(true, context)
         }
     }
