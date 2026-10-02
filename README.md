@@ -183,3 +183,6 @@ Reference it in your `AndroidManifest.xml`:
 - **Connection Refused**: Ensure the proxy server is started (**RUNNING** status on Dashboard) and the port matches your client application configuration.
 - **Permission Denied for Overlay**: If the floating button does not appear, open **Overlay Setup** and ensure the permission toggle is enabled in Android System Settings.
 - **Cleartext Traffic Not Permitted**: In Android 9+ (API 28+), non-HTTPS cleartext traffic requires `cleartextTrafficPermitted="true"` in your client app's `network_security_config.xml`.
+
+
+<!-- VPN inspector routing enabled -->
