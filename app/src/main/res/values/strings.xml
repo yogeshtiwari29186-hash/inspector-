@@ -1,5 +1,1 @@
-<resources>
-    <string name="app_name">DevTraffic Inspector</string>
-    <string name="channel_name">DevTraffic Inspector Service</string>
-    <string name="channel_description">Notifies when proxy and traffic inspector are active</string>
-</resources>
+<resources><string name="app_name">Security Research OS</string></resources>
