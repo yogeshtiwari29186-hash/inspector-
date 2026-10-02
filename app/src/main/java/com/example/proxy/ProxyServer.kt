@@ -1,5 +1,6 @@
 package com.example.proxy
 
+import com.example.DevTrafficInspectorApp
 import com.example.data.model.CapturedRequest
 import com.example.data.model.CapturedResponse
 import com.example.data.model.TrafficState
