@@ -152,17 +152,16 @@ jobs:
           title="Debug APK Build #${GITHUB_RUN_NUMBER}"
 
           notes_file="$(mktemp)"
-          cat > "$notes_file" <<EOF
-This is an automatically generated debug APK.
-Built by GitHub Actions.
-Run number: ${GITHUB_RUN_NUMBER}
-Run attempt: ${GITHUB_RUN_ATTEMPT}
-Source commit SHA: ${GITHUB_SHA}
-The APK is intended for testing.
-This APK is not a Play Store production release.
-The APK is signed only with a temporary debug keystore.
-Release asset: ${RELEASE_FILENAME}
-EOF
+          printf '%s\\n' \
+            "This is an automatically generated debug APK." \
+            "Built by GitHub Actions." \
+            "Run number: ${GITHUB_RUN_NUMBER}" \
+            "Run attempt: ${GITHUB_RUN_ATTEMPT}" \
+            "Source commit SHA: ${GITHUB_SHA}" \
+            "The APK is intended for testing." \
+            "This APK is not a Play Store production release." \
+            "The APK is signed only with a temporary debug keystore." \
+            "Release asset: ${RELEASE_FILENAME}" > "$notes_file"
 
           gh release create "$tag" "$RELEASE_ASSET" \
             --repo "$GITHUB_REPOSITORY" \
